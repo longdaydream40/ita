@@ -54,7 +54,18 @@ def test_sub2api_update_account_credentials_preserves_existing_fields():
             assert body["concurrency"] == 9
             assert body["group_ids"] == [5]
             assert body["credentials"]["refresh_token"] == "new_ref"
+            assert body["status"] == "active"
+            assert body["error_message"] == ""
+            assert body["schedulable"] is True
+            assert body["temp_unschedulable_reason"] == ""
+            assert body["temp_unschedulable_until"] is None
             return {"id": 42}
+        if url.endswith("/admin/accounts/42/clear-error"):
+            return {"id": 42, "status": "active"}
+        if url.endswith("/admin/accounts/42/clear-rate-limit"):
+            return {"id": 42, "status": "active"}
+        if url.endswith("/admin/accounts/42/schedulable"):
+            return {"id": 42, "status": "active", "schedulable": True}
         raise AssertionError((method, url))
 
     provider = Sub2ApiExportProvider(
@@ -75,9 +86,16 @@ def test_sub2api_update_account_credentials_preserves_existing_fields():
             "platform": "openai",
             "type": "oauth",
             "concurrency": 9,
+            "status": "error",
+            "error_message": "Token revoked",
+            "schedulable": False,
             "account_groups": [{"group_id": 5}],
-            "extra": {"old": True},
+            "extra": {"old": True, "codex" + "flow_source": "legacy"},
         },
     )
     assert result["remote_action"] == "updated"
     assert requests[1][0] == "PUT"
+    called_urls = [item[1] for item in requests]
+    assert "https://sub.example/api/v1/admin/accounts/42/clear-error" in called_urls
+    assert "https://sub.example/api/v1/admin/accounts/42/clear-rate-limit" in called_urls
+    assert "https://sub.example/api/v1/admin/accounts/42/schedulable" in called_urls

@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="检测 Sub2API 指定分组错误账号，并重新授权更新原账号")
     parser.add_argument("--group", help="Sub2API 分组 ID；默认读取 SUB2API_GROUP")
     parser.add_argument("--apply", action="store_true", help="实际执行重新授权和更新；不传则只 dry-run")
+    parser.add_argument("--account-id", help="只处理指定 Sub2API 账号 ID；可用于修复单个账号调度状态")
     parser.add_argument("--limit", type=int, default=0, help="最多处理多少个错误账号；0 表示全部")
     parser.add_argument("--retries", type=int, default=3, help="单账号重新授权最大尝试次数，默认 3")
     parser.add_argument("--artifact-dir", help="输出目录，默认 artifacts/reauth_<timestamp>")
@@ -162,7 +163,7 @@ def _reauthorize_one(
     return {"status": "success", "sub2api_id": account_id, "email": record.email, "idp_account_id": account.id, "update": update_result}
 
 
-def run(cfg: RuntimeConfig, *, apply: bool, limit: int = 0, retries: int = 3, progress: ProgressFn | None = _progress) -> dict[str, Any]:
+def run(cfg: RuntimeConfig, *, apply: bool, limit: int = 0, retries: int = 3, account_id: str = "", progress: ProgressFn | None = _progress) -> dict[str, Any]:
     cfg.artifact_dir.mkdir(parents=True, exist_ok=True)
     provider = Sub2ApiExportProvider(Sub2ApiConfig(
         url=cfg.sub2api_url,
@@ -178,7 +179,14 @@ def run(cfg: RuntimeConfig, *, apply: bool, limit: int = 0, retries: int = 3, pr
         progress("扫描 Sub2API 分组错误账号", {"group": cfg.sub2api_group, "apply": apply})
     scanner = Sub2ApiHealthScanner(provider)
     accounts = scanner.list_accounts(group=cfg.sub2api_group)
-    error_accounts = [item for item in accounts if is_error_account(item)]
+    if str(account_id or "").strip():
+        wanted = str(account_id).strip()
+        error_accounts = [item for item in accounts if str(item.get("id") or "") == wanted]
+        if not error_accounts:
+            detail = provider.get_account(wanted)
+            error_accounts = [detail]
+    else:
+        error_accounts = [item for item in accounts if is_error_account(item)]
     detected_error_count = len(error_accounts)
     if limit and limit > 0:
         error_accounts = error_accounts[:limit]
@@ -189,6 +197,7 @@ def run(cfg: RuntimeConfig, *, apply: bool, limit: int = 0, retries: int = 3, pr
     summary: dict[str, Any] = {
         "status": "dry_run" if not apply else "running",
         "group": cfg.sub2api_group,
+        "account_id": str(account_id or ""),
         "total": len(accounts),
         "detected_error_count": detected_error_count,
         "error_count": len(error_accounts),
@@ -261,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg = _cfg_from_args(args)
         if args.group:
             cfg = replace(cfg, sub2api_group=str(args.group))
-        summary = run(cfg, apply=bool(args.apply), limit=max(0, int(args.limit or 0)), retries=max(1, int(args.retries or 1)))
+        summary = run(cfg, apply=bool(args.apply), limit=max(0, int(args.limit or 0)), retries=max(1, int(args.retries or 1)), account_id=str(args.account_id or ""))
     except IdpTeamAutomationError as exc:
         print(f"任务失败: stage={exc.stage} error={exc}", file=sys.stderr)
         return 1

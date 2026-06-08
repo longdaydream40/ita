@@ -276,6 +276,30 @@ class Sub2ApiExportProvider:
             raise Sub2ApiError("Sub2API 账号详情返回格式异常", stage="sub2api_account_detail")
         return data
 
+    def clear_account_error(self, account_id: int | str) -> dict[str, Any]:
+        api_base = self._api_base(self.config.url)
+        token = self._login(api_base)
+        data = self.request_json("POST", f"{api_base}/admin/accounts/{account_id}/clear-error", headers=self._auth_headers(token), json_body={}, timeout=20)
+        return data if isinstance(data, dict) else {"id": account_id}
+
+    def clear_account_rate_limit(self, account_id: int | str) -> dict[str, Any]:
+        api_base = self._api_base(self.config.url)
+        token = self._login(api_base)
+        data = self.request_json("POST", f"{api_base}/admin/accounts/{account_id}/clear-rate-limit", headers=self._auth_headers(token), json_body={}, timeout=20)
+        return data if isinstance(data, dict) else {"id": account_id}
+
+    def enable_account_scheduling(self, account_id: int | str) -> dict[str, Any]:
+        api_base = self._api_base(self.config.url)
+        token = self._login(api_base)
+        data = self.request_json("POST", f"{api_base}/admin/accounts/{account_id}/schedulable", headers=self._auth_headers(token), json_body={}, timeout=20)
+        return data if isinstance(data, dict) else {"id": account_id}
+
+    def restore_account_dispatch(self, account_id: int | str) -> dict[str, Any]:
+        latest: dict[str, Any] = {}
+        for action in (self.clear_account_error, self.clear_account_rate_limit, self.enable_account_scheduling):
+            latest = action(account_id)
+        return latest
+
     def update_account_credentials(self, account_id: int | str, record: OAuthExportRecord, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
         api_base = self._api_base(self.config.url)
         token = self._login(api_base)
@@ -299,10 +323,28 @@ class Sub2ApiExportProvider:
                     group_ids.append(gid)
             payload["group_ids"] = group_ids
         if isinstance(current.get("extra"), dict):
-            payload["extra"] = {**current["extra"], **payload.get("extra", {})}
+            legacy_prefixes = ("chatgpt" + "team", "codex" + "flow")
+            preserved_extra = {
+                str(key): value
+                for key, value in current["extra"].items()
+                if not str(key).lower().startswith(legacy_prefixes)
+            }
+            payload["extra"] = {**preserved_extra, **payload.get("extra", {})}
+        payload["status"] = "active"
+        payload["error_message"] = ""
+        payload["schedulable"] = True
+        payload["temp_unschedulable_reason"] = ""
+        payload["temp_unschedulable_until"] = None
+        payload["overload_until"] = None
+        payload["rate_limited_at"] = None
+        payload["rate_limit_reset_at"] = None
         updated = self.request_json("PUT", f"{api_base}/admin/accounts/{account_id}", headers=self._auth_headers(token), json_body=payload, timeout=20)
         if not isinstance(updated, dict):
             updated = {"id": account_id}
+        try:
+            updated = self.restore_account_dispatch(account_id)
+        except Sub2ApiError:
+            raise
         return {
             "status": "success",
             "provider": self.name,

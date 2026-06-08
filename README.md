@@ -153,6 +153,13 @@ python3 scripts/reauthorize_sub2api_errors.py --group 5
 python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply
 ```
 
+重新授权成功后会自动执行：
+
+- 更新原 Sub2API 账号 credentials。
+- 清空账号错误状态。
+- 清空账号限流状态。
+- 打开账号调度。
+
 限制只处理前 3 个错误账号：
 
 ```bash
