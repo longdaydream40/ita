@@ -4,9 +4,11 @@
 
 ## 项目简介
 
-Idp Team Automation 面向 Team 成员账号的批量开通与授权录入场景，整合 IDP 账号生成、OpenAI SSO 授权链路、Codex OAuth token 获取和 Sub2API 账号写入能力。项目采用纯 HTTP 协议流程，无浏览器 fallback，支持单账号执行和多线程批量 TUI，可在执行过程中实时展示成功、失败、运行中和等待数量，并在任务失败后按配置自动重试。
+Idp Team Automation 是一个基于 OpenAI SSO Bug 的 Team 成员账号开通自动化工具。
 
-该项目的核心目标是把 Team 成员账号从生成、SSO 授权到 Sub2API 可用账号录入的流程自动化，减少重复手工操作，同时保留脱敏日志、artifact 目录和 summary 统计结果，方便排查和复盘。
+项目会自动完成 IDP 账号生成、Team 成员账号开通、Codex 授权 URL 生成、refresh token 获取，并将账号录入 Sub2API。
+
+IDP API 点数需要联系 @该隐 购买。
 
 ## 作者信息
 
@@ -15,7 +17,7 @@ Idp Team Automation 面向 Team 成员账号的批量开通与授权录入场景
 
 ## 联系方式
 
-iDP 点数购买，请联系 @该隐：
+iDP / IDP API 点数购买，请联系 @该隐：
 
 ![@该隐二维码](docs/assets/cain_qr.jpg)
 
