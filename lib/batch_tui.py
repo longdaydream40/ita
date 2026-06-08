@@ -49,7 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threads", type=int, help="并发线程数；不传则进入交互输入")
     parser.add_argument("--yes", action="store_true", help="跳过启动确认")
     parser.add_argument("--limit", type=int, default=0, help="补授权最多处理多少个错误账号；0 表示全部")
-    parser.add_argument("--account-id", help="补授权只处理指定 Sub2API 账号 ID")
+    parser.add_argument("--email", help="补授权只处理指定邮箱")
+    parser.add_argument("--account-id", help="补授权只处理指定 Sub2API 账号 ID；兼容旧参数")
 
     parser.add_argument("--idp-base", help="IDP base URL")
     parser.add_argument("--idp-token", help="IDP 访问码")
@@ -475,7 +476,7 @@ def run_batch(base_cfg: RuntimeConfig, *, count: int, threads: int, artifact_roo
     return _write_summary(artifact_root, states, count=count, threads=threads, retries=max(1, int(retries or 1)), mode="register")
 
 
-def _select_reauth_accounts(cfg: RuntimeConfig, *, account_id: str = "", limit: int = 0, progress: bool = True) -> tuple[list[dict[str, Any]], int, int]:
+def _select_reauth_accounts(cfg: RuntimeConfig, *, account_id: str = "", email: str = "", limit: int = 0, progress: bool = True) -> tuple[list[dict[str, Any]], int, int]:
     if progress:
         print(f"扫描 Sub2API 分组 {cfg.sub2api_group} 错误账号...", file=sys.stderr, flush=True)
     provider = _sub2api_provider(cfg)
@@ -486,6 +487,9 @@ def _select_reauth_accounts(cfg: RuntimeConfig, *, account_id: str = "", limit: 
         selected = [item for item in accounts if str(item.get("id") or "") == wanted]
         if not selected:
             selected = [provider.get_account(wanted)]
+    elif str(email or "").strip():
+        wanted_email = str(email).strip().lower()
+        selected = [item for item in accounts if account_email(item).strip().lower() == wanted_email]
     else:
         selected = [item for item in accounts if is_error_account(item)]
     detected = len(selected)
@@ -553,8 +557,8 @@ def main(argv: list[str] | None = None) -> int:
             load_dotenv()
             default_group = str(args.sub2api_group or env_first("SUB2API_GROUP", default="5") or "5")
             args.sub2api_group = _prompt_text("Sub2API 分组 ID", default=default_group)
-            args.account_id = _prompt_text("只处理指定 Sub2API 账号 ID，留空则处理分组错误账号", default=args.account_id or "")
-            args.limit = _prompt_int("最多处理错误账号数量，0 表示全部", default=int(args.limit or 0), minimum=0) if args.account_id == "" else int(args.limit or 0)
+            args.email = _prompt_text("只处理指定邮箱，留空则处理分组错误账号", default=args.email or "")
+            args.limit = _prompt_int("最多处理错误账号数量，0 表示全部", default=int(args.limit or 0), minimum=0) if args.email == "" and not args.account_id else int(args.limit or 0)
             args.threads = _prompt_int("启动线程数", default=args.threads or 3, minimum=1)
     else:
         args.mode = args.mode or "register"
@@ -589,6 +593,7 @@ def main(argv: list[str] | None = None) -> int:
             selected, total_accounts, detected_error_count = _select_reauth_accounts(
                 base_cfg,
                 account_id=str(args.account_id or ""),
+                email=str(args.email or ""),
                 limit=max(0, int(args.limit or 0)),
                 progress=True,
             )

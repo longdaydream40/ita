@@ -140,10 +140,10 @@ python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --yes
 python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --limit 5 --yes
 ```
 
-重新补授权指定单个 Sub2API 账号：
+重新补授权指定单个邮箱：
 
 ```bash
-python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 1 --account-id 5162 --yes
+python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 1 --email user@example.com --yes
 ```
 
 ## Sub2API 分组错误账号检测
@@ -190,6 +190,12 @@ python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --yes
 
 ```bash
 python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply --limit 3
+```
+
+只处理指定邮箱：
+
+```bash
+python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply --email user@example.com
 ```
 
 当前检测结果：

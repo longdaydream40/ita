@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from lib.batch_tui import run_reauth_batch
+from lib.batch_tui import _select_reauth_accounts, run_reauth_batch
 from lib.config import RuntimeConfig
 
 
@@ -46,3 +46,33 @@ def test_run_reauth_batch_uses_worker(monkeypatch, tmp_path):
     assert summary["failed_count"] == 0
     assert summary["sub2api_group_total"] == 10
     assert sorted(item[0] for item in calls) == [1, 2]
+
+
+def test_select_reauth_accounts_by_email(monkeypatch):
+    class FakeProvider:
+        def __init__(self, cfg):
+            self.config = cfg
+
+    class FakeScanner:
+        def __init__(self, provider):
+            self.provider = provider
+
+        def list_accounts(self, *, group):
+            return [
+                {"id": 1, "status": "error", "credentials": {"email": "a@example.com"}},
+                {"id": 2, "status": "error", "credentials": {"email": "b@example.com"}},
+            ]
+
+    monkeypatch.setattr("lib.batch_tui._sub2api_provider", lambda cfg: FakeProvider(cfg))
+    monkeypatch.setattr("lib.batch_tui.Sub2ApiHealthScanner", FakeScanner)
+    cfg = RuntimeConfig(
+        idp_token="tok",
+        sub2api_url="https://sub.example",
+        sub2api_email="admin@example.com",
+        sub2api_password="pw",
+        sub2api_group="5",
+    )
+    selected, total, detected = _select_reauth_accounts(cfg, email="b@example.com", progress=False)
+    assert total == 2
+    assert detected == 1
+    assert selected[0]["id"] == 2
