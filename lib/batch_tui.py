@@ -274,6 +274,29 @@ def _run_reauth_one(index: int, sub2api_account: dict[str, Any], base_cfg: Runti
         if attempt < max_attempts:
             time.sleep(min(5.0, 0.8 * attempt))
     final = dict(last_failure)
+    try:
+        provider = _sub2api_provider(base_cfg)
+        current = provider.get_account(sub2api_id)
+        status = str(current.get("status") or "").lower()
+        error = str(current.get("error_message") or current.get("last_error") or current.get("error") or "").strip()
+        credentials = current.get("credentials") if isinstance(current.get("credentials"), dict) else {}
+        if status == "active" and not error and (credentials.get("expires_at") or credentials.get("email")):
+            events.put({
+                "type": "success",
+                "index": index,
+                "attempt": max_attempts,
+                "result": {
+                    "status": "success",
+                    "sub2api_id": sub2api_id,
+                    "email": credentials.get("email") or email,
+                    "idp_account_id": final.get("account_id") or "",
+                    "remote_verified": True,
+                },
+                "ts": utc_now_iso(),
+            })
+            return
+    except Exception:
+        pass
     final["type"] = "failed"
     final["ts"] = utc_now_iso()
     events.put(final)

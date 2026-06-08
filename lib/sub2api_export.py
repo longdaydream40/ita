@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import base64
 import json
+import random
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -22,6 +24,9 @@ from .errors import ConfigError, Sub2ApiError
 from .logging_utils import JsonlLogger, redact
 
 RequestJson = Callable[..., Any]
+_SUB2API_WRITE_LOCK = threading.Lock()
+_SUB2API_LAST_WRITE_AT = 0.0
+_SUB2API_MIN_WRITE_INTERVAL = 0.18
 
 
 def first_non_empty(*values: Any) -> str:
@@ -106,6 +111,19 @@ class Sub2ApiExportProvider:
         self.logger = logger
         self.request_json = request_json or self._request_json
 
+    def _throttle_admin_write(self, method: str, url: str) -> None:
+        global _SUB2API_LAST_WRITE_AT
+        if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+            return
+        if "/admin/" not in url:
+            return
+        with _SUB2API_WRITE_LOCK:
+            now = time.monotonic()
+            wait = _SUB2API_MIN_WRITE_INTERVAL - (now - _SUB2API_LAST_WRITE_AT)
+            if wait > 0:
+                time.sleep(wait)
+            _SUB2API_LAST_WRITE_AT = time.monotonic()
+
     def _api_base(self, raw_url: str) -> str:
         base = str(raw_url or "").strip().rstrip("/")
         if not base:
@@ -143,10 +161,11 @@ class Sub2ApiExportProvider:
         if self.logger:
             self.logger.write("sub2api_request", {"method": method, "url": url, "headers": merged_headers, "body": json_body})
         req = urllib.request.Request(url, data=body, method=method, headers=merged_headers)
-        attempts = 3
+        attempts = 8
         payload: Any = {}
         for attempt in range(1, attempts + 1):
             try:
+                self._throttle_admin_write(method, url)
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     text = resp.read().decode("utf-8", "replace")
                     payload = json.loads(text) if text.strip() else {}
@@ -162,7 +181,24 @@ class Sub2ApiExportProvider:
                 if self.logger:
                     self.logger.write("sub2api_error", {"method": method, "url": url, "status": exc.code, "body": payload or text[:500]})
                 message = payload.get("message") or payload.get("detail") or text[:200] or f"HTTP {exc.code}"
-                raise Sub2ApiError(f"Sub2API request failed: {message}", stage="sub2api_request", data={"status": exc.code, "response": redact(payload)}) from exc
+                if exc.code == 429 and attempt < attempts:
+                    retry_after = 0.0
+                    try:
+                        retry_after = float(exc.headers.get("Retry-After") or 0)
+                    except Exception:
+                        retry_after = 0.0
+                    sleep_for = max(retry_after, min(30.0, 1.5 * attempt + random.uniform(0.2, 1.2)))
+                    if self.logger:
+                        self.logger.write("sub2api_retry", {"method": method, "url": url, "status": exc.code, "attempt": attempt, "sleep": sleep_for})
+                    time.sleep(sleep_for)
+                    continue
+                if exc.code >= 500 and attempt < attempts:
+                    sleep_for = min(10.0, 0.8 * attempt + random.uniform(0.1, 0.8))
+                    if self.logger:
+                        self.logger.write("sub2api_retry", {"method": method, "url": url, "status": exc.code, "attempt": attempt, "sleep": sleep_for})
+                    time.sleep(sleep_for)
+                    continue
+                raise Sub2ApiError(f"Sub2API request failed: {message}", stage="sub2api_request", retryable=exc.code in {408, 409, 425, 429} or exc.code >= 500, data={"status": exc.code, "response": redact(payload)}) from exc
             except (urllib.error.URLError, ssl.SSLError, TimeoutError, socket.timeout, ConnectionResetError) as exc:
                 if attempt >= attempts or not self._is_transient_request_error(exc):
                     if self.logger:
@@ -300,6 +336,35 @@ class Sub2ApiExportProvider:
             latest = action(account_id)
         return latest
 
+    def _account_looks_restored(self, account: dict[str, Any]) -> bool:
+        status = str(account.get("status") or "").lower()
+        error = str(account.get("error_message") or account.get("last_error") or account.get("error") or "").strip()
+        credentials = account.get("credentials") if isinstance(account.get("credentials"), dict) else {}
+        return status == "active" and not error and bool(credentials.get("expires_at") or credentials.get("email"))
+
+    def restore_account_dispatch_best_effort(self, account_id: int | str, *, attempts: int = 4) -> dict[str, Any]:
+        last_error: Sub2ApiError | None = None
+        latest: dict[str, Any] = {}
+        for attempt in range(1, max(1, attempts) + 1):
+            try:
+                latest = self.restore_account_dispatch(account_id)
+                if isinstance(latest, dict) and (latest.get("schedulable") is True or self._account_looks_restored(latest)):
+                    return latest
+            except Sub2ApiError as exc:
+                last_error = exc
+            try:
+                current = self.get_account(account_id)
+                if self._account_looks_restored(current):
+                    return current
+            except Sub2ApiError as exc:
+                last_error = exc
+            time.sleep(min(8.0, 1.5 * attempt))
+        if latest:
+            return latest
+        if last_error:
+            raise last_error
+        return {"id": account_id}
+
     def update_account_credentials(self, account_id: int | str, record: OAuthExportRecord, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
         api_base = self._api_base(self.config.url)
         token = self._login(api_base)
@@ -341,10 +406,7 @@ class Sub2ApiExportProvider:
         updated = self.request_json("PUT", f"{api_base}/admin/accounts/{account_id}", headers=self._auth_headers(token), json_body=payload, timeout=20)
         if not isinstance(updated, dict):
             updated = {"id": account_id}
-        try:
-            updated = self.restore_account_dispatch(account_id)
-        except Sub2ApiError:
-            raise
+        updated = self.restore_account_dispatch_best_effort(account_id)
         return {
             "status": "success",
             "provider": self.name,

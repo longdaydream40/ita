@@ -48,6 +48,37 @@ def test_run_reauth_batch_uses_worker(monkeypatch, tmp_path):
     assert sorted(item[0] for item in calls) == [1, 2]
 
 
+def test_reauth_worker_remote_reconcile_success(monkeypatch, tmp_path):
+    from lib.batch_tui import _run_reauth_one
+    import queue
+
+    class FakeProvider:
+        config = object()
+
+        def get_account(self, account_id):
+            return {
+                "id": int(account_id),
+                "status": "active",
+                "error_message": "",
+                "credentials": {"email": "a@example.com", "expires_at": 123},
+            }
+
+    def fail_reauth_one(**kwargs):
+        from lib.errors import Sub2ApiError
+
+        raise Sub2ApiError("Too many requests", stage="sub2api_request")
+
+    monkeypatch.setattr("lib.batch_tui._reauthorize_one", fail_reauth_one)
+    monkeypatch.setattr("lib.batch_tui._sub2api_provider", lambda cfg: FakeProvider())
+    events = queue.Queue()
+    cfg = RuntimeConfig(idp_token="tok", sub2api_url="https://sub.example", sub2api_email="e", sub2api_password="p", sub2api_group="5")
+    _run_reauth_one(1, {"id": 1, "credentials": {"email": "a@example.com"}}, cfg, tmp_path, events, retries=1)
+    kinds = []
+    while not events.empty():
+        kinds.append(events.get()["type"])
+    assert kinds[-1] == "success"
+
+
 def test_select_reauth_accounts_by_email(monkeypatch):
     class FakeProvider:
         def __init__(self, cfg):
